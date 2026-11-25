@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Voice Scheduler</string>
+    <string name="a11y_desc">Taps the Send button inside WhatsApp at your scheduled time. Only active while a scheduled voice note is being sent.</string>
+</resources>
