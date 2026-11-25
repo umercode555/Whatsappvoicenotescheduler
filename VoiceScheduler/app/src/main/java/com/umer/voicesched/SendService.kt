@@ -2,14 +2,10 @@ package com.umer.voicesched
 
 import android.app.Activity
 import android.app.KeyguardManager
-import android.app.NotificationManager
-import android.app.PendingIntent
 import android.app.Service
-import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
 import android.os.PowerManager
@@ -22,23 +18,40 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 
 object Launcher {
-    /** Hands the voice file to WhatsApp, straight into the chosen chat. */
-    fun launch(ctx: Context, id: Long): Boolean {
+    /** Always the native voice-note mime for Ogg/Opus files, whatever the stored value says. */
+    fun voiceMime(item: Item): String {
+        val n = item.file.lowercase()
+        return if (n.endsWith(".opus") || n.endsWith(".ogg")) "audio/ogg" else item.mime
+    }
+
+    /**
+     * Hands the voice file to WhatsApp, straight into the chosen chat (same intent as before).
+     * Guarded by [Store.markLaunched]: it succeeds at most ONCE per approved task, so replayed
+     * notifications / activities / retries can never open a second share for the same note.
+     */
+    fun launchOnce(ctx: Context, id: Long): Boolean {
+        if (!Store.markLaunched(id)) return false
         val item = Store.get(id) ?: return false
-        val uri = FileProvider.getUriForFile(ctx, ctx.packageName + ".fileprovider", File(item.file))
-        val i = Intent(Intent.ACTION_SEND)
-        i.type = item.mime
-        i.putExtra(Intent.EXTRA_STREAM, uri)
-        i.putExtra("jid", item.number + "@s.whatsapp.net")
-        i.setPackage(item.pkg)
-        i.clipData = ClipData.newRawUri("voice", uri)
-        i.addFlags(
-            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK or
-                Intent.FLAG_ACTIVITY_CLEAR_TOP
-        )
-        ctx.startActivity(i)
-        Automation.markLaunched()
-        return true
+        return try {
+            val uri = FileProvider.getUriForFile(ctx, ctx.packageName + ".fileprovider", File(item.file))
+            val i = Intent(Intent.ACTION_SEND)
+            i.type = voiceMime(item)
+            i.putExtra(Intent.EXTRA_STREAM, uri)
+            i.putExtra("jid", item.number + "@s.whatsapp.net")
+            i.setPackage(item.pkg)
+            i.clipData = ClipData.newRawUri("voice", uri)
+            i.addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP
+            )
+            ctx.startActivity(i)
+            Automation.markLaunched()
+            true
+        } catch (e: Exception) {
+            // WhatsApp was never opened, so another attempt is still safe
+            Store.unmarkLaunched(id)
+            false
+        }
     }
 }
 
@@ -48,10 +61,11 @@ class WakeActivity : Activity() {
         setShowWhenLocked(true)
         setTurnScreenOn(true)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        Store.init(this)
         val id = intent.getLongExtra("id", -1L)
         val go = {
             try {
-                Launcher.launch(this, id)
+                Launcher.launchOnce(this, id)
             } catch (e: Exception) {
             }
             finish()
@@ -69,46 +83,9 @@ class WakeActivity : Activity() {
     }
 }
 
-class AlarmReceiver : BroadcastReceiver() {
-    override fun onReceive(context: Context, intent: Intent) {
-        Store.init(context)
-        val id = intent.getLongExtra("id", -1L)
-        if (id < 0) return
-        try {
-            SendService.start(context, id)
-        } catch (e: Exception) {
-            Store.get(id)?.let {
-                Store.update(it.copy(status = Status.FAILED, error = "Android blocked background start: " + e.message))
-            }
-        }
-    }
-}
-
-class BootReceiver : BroadcastReceiver() {
-    override fun onReceive(context: Context, intent: Intent) {
-        Store.init(context)
-        val now = System.currentTimeMillis()
-        for (it in Store.all().filter { s -> s.status == Status.PENDING || s.status == Status.SENDING }) {
-            if (it.timeMs > now) {
-                Scheduler.schedule(context, it)
-            } else if (now - it.timeMs < 15 * 60_000L) {
-                Store.update(it.copy(status = Status.PENDING))
-                try {
-                    SendService.start(context, it.id)
-                } catch (e: Exception) {
-                    Store.update(it.copy(status = Status.MISSED, error = "Phone was off at send time"))
-                }
-            } else {
-                Store.update(it.copy(status = Status.MISSED, error = "Phone was off at send time"))
-            }
-        }
-    }
-}
-
 class SendService : Service() {
     companion object {
         private const val FG_ID = 77
-        private const val FSI_ID = 78
 
         fun start(ctx: Context, id: Long) {
             ContextCompat.startForegroundService(
@@ -123,6 +100,7 @@ class SendService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Store.init(this)
         val id = intent?.getLongExtra("id", -1L) ?: -1L
         startForeground(FG_ID, Notifs.fg(this, "Sending voice note"))
         active.incrementAndGet()
@@ -133,7 +111,7 @@ class SendService : Service() {
                 fail(id, "Unexpected error: " + e.message)
             } finally {
                 if (active.decrementAndGet() <= 0) {
-                    stopForeground(true)
+                    stopForeground(Service.STOP_FOREGROUND_REMOVE)
                     stopSelf()
                 }
             }
@@ -151,28 +129,24 @@ class SendService : Service() {
     }
 
     private fun fail(id: Long, msg: String) {
-        val it = Store.get(id) ?: return
-        Store.update(it.copy(status = Status.FAILED, error = msg))
+        val it = Store.finish(id, false, msg) ?: return
         Notifs.result(this, id, "Voice note failed: " + it.name, msg)
     }
 
     private fun openWhatsApp(id: Long) {
-        val nm = getSystemService(NotificationManager::class.java)
         val wake = Intent(this, WakeActivity::class.java).putExtra("id", id)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        val pi = PendingIntent.getActivity(
-            this, id.toInt(), wake, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        try { nm.notify(FSI_ID, Notifs.fsi(this, pi)) } catch (e: Exception) {}
         try { startActivity(wake) } catch (e: Exception) {}
         if (!waitFor(4000) { Automation.launched }) {
-            try { Launcher.launch(this, id) } catch (e: Exception) {}
+            // no-op if WakeActivity already launched it
+            try { Launcher.launchOnce(this, id) } catch (e: Exception) {}
         }
-        nm.cancel(FSI_ID)
     }
 
     private fun process(id: Long) {
-        val item = Store.claim(id) ?: return
+        val item = Store.get(id) ?: return
+        // only an approved task that has not been handed to WhatsApp yet may run; anything else is a replay
+        if (item.status != Status.SENDING || item.launched) return
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         @Suppress("DEPRECATION")
         val wl = pm.newWakeLock(
@@ -181,29 +155,31 @@ class SendService : Service() {
         )
         wl.acquire(4 * 60_000L)
         try {
-            if (!File(item.file).exists()) return fail(id, "Audio file is missing")
+            val f = File(item.file)
+            if (!f.exists()) return fail(id, "Audio file is missing")
+            if (!Files.isOgg(f)) return fail(id, "Audio is not in voice-note (Opus) format. Re-add the voice note.")
             if (!Wa.installed(this).contains(item.pkg)) return fail(id, "WhatsApp is not installed")
-            if (!Setup.a11yEnabled(this)) return fail(id, "Accessibility service is off. Enable it in setup.")
+            if (!Setup.a11yEnabled(this)) return fail(id, "Accessibility service is off. Enable it in Settings.")
 
-            var ok = false
-            for (attempt in 1..2) {
-                Automation.begin(id, item.pkg)
-                openWhatsApp(id)
-                val done = waitFor(40_000) {
-                    WhatsAppAccessibilityService.instance?.nudge()
-                    Automation.clicked
-                }
-                if (done) { ok = true; break }
+            Automation.begin(id, item.pkg)
+            openWhatsApp(id)
+            val cur = Store.get(id)
+            if (cur == null || !cur.launched) return fail(id, "Could not open WhatsApp")
+            // ONE launch, ONE wait. No second launch: a retry here is what could double-send.
+            val done = waitFor(45_000) {
+                WhatsAppAccessibilityService.instance?.nudge()
+                Automation.clicked
             }
-            if (ok) {
+            if (done) {
+                // mark completed immediately and durably, before anything else can run
+                Store.finish(id, true, null)
+                Notifs.result(this, id, "Voice note sent", "To " + item.name, true)
                 Thread.sleep(5000)
                 WhatsAppAccessibilityService.instance?.goHome()
-                Store.update(item.copy(status = Status.SENT, error = null))
-                Notifs.result(this, id, "Voice note sent", "To " + item.name)
             } else {
                 fail(
                     id,
-                    "Could not press Send in WhatsApp. Check: phone not PIN-locked, accessibility on, number has WhatsApp."
+                    "Send was not confirmed. Check the chat before retrying (it may have been delivered)."
                 )
             }
         } finally {

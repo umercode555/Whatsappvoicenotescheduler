@@ -1,21 +1,24 @@
 package com.umer.voicesched
 
-import android.Manifest
-import android.content.Intent
-import android.net.Uri
-import android.os.Build
-import android.os.SystemClock
-import android.provider.ContactsContract
-import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -25,78 +28,55 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
-import kotlin.math.abs
-import kotlin.random.Random
 
 val Bg = Color(0xFF0B141A)
 val Surf = Color(0xFF1F2C34)
@@ -105,6 +85,10 @@ val RowHi = Color(0xFF2B2E32)
 val Green = Color(0xFF21C063)
 val Muted = Color(0xFF8696A0)
 val Red = Color(0xFFEF5350)
+val Amber = Color(0xFFFFB74D)
+val Blue = Color(0xFF64B5F6)
+val Glass = Color(0x16FFFFFF)
+val GlassBorder = Color(0x26FFFFFF)
 
 @Composable
 fun AppTheme(content: @Composable () -> Unit) {
@@ -126,15 +110,191 @@ fun fmtDur(ms: Long): String {
 
 fun fmtWhen(ms: Long): String = SimpleDateFormat("EEE d MMM · h:mm a", Locale.getDefault()).format(Date(ms))
 
+private fun midnight(ms: Long): Long = Calendar.getInstance().apply {
+    timeInMillis = ms
+    set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+}.timeInMillis
+
+/** "Today · 3:00 PM", "Tomorrow · 9:00 AM", "Fri 28 Nov · 7:15 PM" */
+fun fmtRel(ms: Long): String {
+    val time = SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(ms))
+    val diff = Math.round((midnight(ms) - midnight(System.currentTimeMillis())) / 86_400_000.0).toInt()
+    val day = when (diff) {
+        0 -> "Today"
+        1 -> "Tomorrow"
+        -1 -> "Yesterday"
+        else -> SimpleDateFormat("EEE d MMM", Locale.getDefault()).format(Date(ms))
+    }
+    return "$day · $time"
+}
+
+// ───────────────────────── shared look ─────────────────────────
+
+fun Modifier.glass(shape: Shape = RoundedCornerShape(22.dp)): Modifier =
+    this.clip(shape).background(Glass).border(1.dp, GlassBorder, shape)
+
+@Composable
+fun Modifier.bounceClick(onClick: () -> Unit): Modifier {
+    val src = remember { MutableInteractionSource() }
+    val pressed by src.collectIsPressedAsState()
+    val sc by animateFloatAsState(if (pressed) 0.97f else 1f, label = "bounce")
+    return this.graphicsLayer { scaleX = sc; scaleY = sc }
+        .clickable(interactionSource = src, indication = null, onClick = onClick)
+}
+
+@Composable
+fun Backdrop(content: @Composable BoxScope.() -> Unit) {
+    Box(
+        Modifier.fillMaxSize().background(
+            Brush.verticalGradient(listOf(Color(0xFF0B141A), Color(0xFF0C2428), Color(0xFF0B141A)))
+        )
+    ) {
+        Box(
+            Modifier.fillMaxSize().background(
+                Brush.radialGradient(
+                    listOf(Green.copy(alpha = 0.16f), Color.Transparent),
+                    center = Offset(900f, 150f), radius = 900f
+                )
+            )
+        )
+        content()
+    }
+}
+
+@Composable
+fun Avatar(path: String?, name: String, size: Dp, modifier: Modifier = Modifier) {
+    val bmp = remember(path) {
+        if (path == null) null else try {
+            android.graphics.BitmapFactory.decodeFile(path)?.asImageBitmap()
+        } catch (e: Throwable) {
+            null
+        }
+    }
+    Box(
+        modifier.size(size).clip(CircleShape)
+            .background(Brush.linearGradient(listOf(Color(0xFF25D366), Color(0xFF0E7C66)))),
+        contentAlignment = Alignment.Center
+    ) {
+        if (bmp != null) {
+            Image(bmp, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        } else {
+            Text(
+                name.trim().take(1).uppercase().ifBlank { "?" }, color = Color.White,
+                fontSize = (size.value * 0.42f).sp, fontWeight = FontWeight.Bold
+            )
+        }
+    }
+}
+
+@Composable
+fun StatusPill(status: String) {
+    val (label, col) = when (status) {
+        Status.SENT -> "Sent" to Green
+        Status.FAILED -> "Failed" to Red
+        Status.MISSED -> "Missed" to Amber
+        Status.SENDING -> "Sending…" to Blue
+        Status.AWAITING -> "Needs approval" to Amber
+        else -> "Scheduled" to Muted
+    }
+    Text(
+        label, color = col, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.clip(RoundedCornerShape(50)).background(col.copy(alpha = 0.16f))
+            .padding(horizontal = 10.dp, vertical = 4.dp)
+    )
+}
+
+@Composable
+fun TopBar(title: String, onBack: (() -> Unit)?, actions: @Composable () -> Unit = {}) {
+    Row(
+        Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 8.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (onBack != null) {
+            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, null, tint = Color.White) }
+        } else Spacer(Modifier.width(12.dp))
+        Text(
+            title, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis
+        )
+        actions()
+    }
+}
+
+@Composable
+fun SectionCard(content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
+    Column(Modifier.fillMaxWidth().glass().padding(16.dp), content = content)
+}
+
+// ───────────────────────── data snapshot ─────────────────────────
+
+data class Snap(val contacts: List<Contact>, val items: List<Item>)
+
+@Composable
+fun rememberSnap(tick: Int): Snap {
+    var s by remember { mutableStateOf(Snap(Store.contacts(), Store.all())) }
+    LaunchedEffect(tick) {
+        while (true) {
+            val n = Snap(Store.contacts(), Store.all())
+            if (n != s) s = n
+            delay(1000)
+        }
+    }
+    return s
+}
+
+// ───────────────────────── navigation ─────────────────────────
+
+sealed class Screen {
+    object Home : Screen()
+    data class Profile(val id: Long) : Screen()
+    data class Edit(val id: Long) : Screen()
+    data class NewNote(val id: Long) : Screen()
+    object Settings : Screen()
+}
+
 @Composable
 fun Root(tick: Int) {
-    var screen by remember { mutableStateOf("home") }
-    BackHandler(enabled = screen != "home") { screen = "home" }
-    Box(Modifier.fillMaxSize().background(Bg)) {
-        when (screen) {
-            "new" -> NewScreen(onBack = { screen = "home" })
-            "setup" -> SetupScreen(tick, onBack = { screen = "home" })
-            else -> HomeScreen(tick, onNew = { screen = "new" }, onSetup = { screen = "setup" })
+    val stack = remember { mutableStateListOf<Screen>(Screen.Home) }
+    val snap = rememberSnap(tick)
+    val pop: () -> Unit = { if (stack.size > 1) stack.removeAt(stack.lastIndex) }
+    BackHandler(enabled = stack.size > 1) { pop() }
+
+    Backdrop {
+        AnimatedContent(
+            targetState = stack.last(),
+            transitionSpec = {
+                (fadeIn(tween(220)) + slideInHorizontally(tween(260)) { it / 10 }) togetherWith fadeOut(tween(140))
+            },
+            label = "nav"
+        ) { s ->
+            when (s) {
+                is Screen.Home -> HomeScreen(
+                    snap, tick,
+                    onOpen = { stack.add(Screen.Profile(it)) },
+                    onNewProfile = { stack.add(Screen.Edit(0L)) },
+                    onSettings = { stack.add(Screen.Settings) }
+                )
+                is Screen.Profile -> ProfileScreen(
+                    s.id, snap, onBack = { pop() },
+                    onEdit = { stack.add(Screen.Edit(s.id)) },
+                    onNewNote = { stack.add(Screen.NewNote(s.id)) }
+                )
+                is Screen.Edit -> EditProfileScreen(
+                    s.id, onBack = { pop() },
+                    onSaved = { newId ->
+                        // creating a profile: jump straight into it
+                        if (s.id == 0L) {
+                            stack.removeAt(stack.lastIndex)
+                            stack.add(Screen.Profile(newId))
+                        } else pop()
+                    },
+                    onDeleted = {
+                        while (stack.size > 1) stack.removeAt(stack.lastIndex)
+                    }
+                )
+                is Screen.NewNote -> NewNoteScreen(s.id, onBack = { pop() })
+                is Screen.Settings -> SettingsScreen(tick, onBack = { pop() })
+            }
         }
     }
 }
@@ -142,612 +302,140 @@ fun Root(tick: Int) {
 // ───────────────────────── HOME ─────────────────────────
 
 @Composable
-fun HomeScreen(tick: Int, onNew: () -> Unit, onSetup: () -> Unit) {
+fun HomeScreen(snap: Snap, tick: Int, onOpen: (Long) -> Unit, onNewProfile: () -> Unit, onSettings: () -> Unit) {
     val ctx = LocalContext.current
-    var all by remember { mutableStateOf(Store.all()) }
-    LaunchedEffect(tick) {
-        while (true) {
-            all = Store.all(); delay(1500)
-        }
-    }
-    val setupOk = remember(tick, all) { Setup.allOk(ctx) }
-    var playing by remember { mutableLongStateOf(-1L) }
-    DisposableEffect(Unit) { onDispose { Player.stop() } }
+    val setupOk = remember(tick, snap) { Setup.allOk(ctx) }
+    val live = snap.items.filter { it.status == Status.PENDING || it.status == Status.AWAITING }
+        .sortedWith(compareBy({ it.status != Status.AWAITING }, { it.timeMs }))
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
-            Row(
-                Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 16.dp, bottom = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Voice Scheduler", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f))
-                IconButton(onClick = onSetup) { Icon(Icons.Default.Settings, null, tint = Color.White) }
+            TopBar("Voice Scheduler", null) {
+                IconButton(onClick = onSettings) { Icon(Icons.Default.Settings, null, tint = Color.White) }
             }
-            val upcoming = all.filter { it.status == Status.PENDING || it.status == Status.SENDING }
-                .sortedBy { it.timeMs }
-            val history = all.filter { it.status != Status.PENDING && it.status != Status.SENDING }
-                .sortedByDescending { it.timeMs }
             LazyColumn(
-                contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 110.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                contentPadding = PaddingValues(16.dp, 4.dp, 16.dp, 120.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 if (!setupOk) item {
                     Row(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Color(0xFF3A2A12))
-                            .clickable { onSetup() }.padding(16.dp),
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Color(0x40FFB74D))
+                            .clickable { onSettings() }.padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.Warning, null, tint = Color(0xFFFFB74D))
+                        Icon(Icons.Default.Warning, null, tint = Amber)
                         Spacer(Modifier.width(12.dp))
                         Text("Finish setup so sending works", color = Color.White, modifier = Modifier.weight(1f))
                         Text("Open", color = Green, fontWeight = FontWeight.SemiBold)
                     }
                 }
-                if (all.isEmpty()) item {
+                if (live.isNotEmpty()) {
+                    item {
+                        Text("Up next", color = Muted, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(start = 4.dp, top = 4.dp))
+                    }
+                    items(live.take(3), key = { "n" + it.id }) { it ->
+                        NextUpCard(it, snap.contacts.firstOrNull { c -> c.id == it.contactId }) {
+                            if (it.status == Status.AWAITING)
+                                ctx.startActivity(Notifs.approvalIntent(ctx, it.id))
+                            else onOpen(it.contactId)
+                        }
+                    }
+                }
+                item {
+                    Text("Profiles", color = Muted, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(start = 4.dp, top = 8.dp))
+                }
+                if (snap.contacts.isEmpty()) item {
                     Column(
-                        Modifier.fillMaxWidth().padding(top = 80.dp),
+                        Modifier.fillMaxWidth().glass().padding(28.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Icon(Icons.Default.Mic, null, tint = Muted, modifier = Modifier.size(56.dp))
+                        Icon(Icons.Default.PersonAdd, null, tint = Green, modifier = Modifier.size(48.dp))
                         Spacer(Modifier.height(12.dp))
-                        Text("No voice notes scheduled", color = Muted, fontSize = 16.sp)
-                        Text("Tap + to schedule one", color = Muted, fontSize = 14.sp)
+                        Text("Create your first profile", color = Color.White, fontSize = 18.sp,
+                            fontWeight = FontWeight.SemiBold)
+                        Text("Add someone like Baba with a photo, then schedule voice notes for them.",
+                            color = Muted, fontSize = 14.sp,
+                            modifier = Modifier.padding(top = 6.dp))
                     }
                 }
-                if (upcoming.isNotEmpty()) {
-                    item { Text("Scheduled", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp)) }
-                    items(upcoming, key = { it.id }) { ItemCard(it, playing == it.id,
-                        onPlay = {
-                            if (playing == it.id) { Player.stop(); playing = -1 }
-                            else { playing = it.id; Player.play(it.file) { playing = -1 } }
-                        },
-                        onDelete = { deleteItem(ctx, it) }, onRetry = {}) }
-                }
-                if (history.isNotEmpty()) {
-                    item { Text("History", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp)) }
-                    items(history, key = { it.id }) { ItemCard(it, playing == it.id,
-                        onPlay = {
-                            if (playing == it.id) { Player.stop(); playing = -1 }
-                            else { playing = it.id; Player.play(it.file) { playing = -1 } }
-                        },
-                        onDelete = { deleteItem(ctx, it) },
-                        onRetry = {
-                            val n = it.copy(timeMs = System.currentTimeMillis() + 8000, status = Status.PENDING, error = null)
-                            Store.update(n); Scheduler.schedule(ctx, n)
-                        }) }
+                items(snap.contacts, key = { "c" + it.id }) { c ->
+                    ProfileCard(c, snap.items.filter { it.contactId == c.id }) { onOpen(c.id) }
                 }
             }
         }
-        FloatingActionButton(
-            onClick = onNew, containerColor = Green, contentColor = Color.Black,
+        ExtendedFloatingActionButton(
+            onClick = onNewProfile, containerColor = Green, contentColor = Color.Black,
+            icon = { Icon(Icons.Default.Add, null) }, text = { Text("New profile", fontWeight = FontWeight.SemiBold) },
             modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp)
-        ) { Icon(Icons.Default.Add, null) }
-    }
-}
-
-fun deleteItem(ctx: android.content.Context, it: Item) {
-    Scheduler.cancel(ctx, it.id)
-    try { File(it.file).delete() } catch (e: Exception) {}
-    Store.remove(it.id)
-}
-
-@Composable
-fun ItemCard(it: Item, playing: Boolean, onPlay: () -> Unit, onDelete: () -> Unit, onRetry: () -> Unit) {
-    val (label, col) = when (it.status) {
-        Status.SENT -> "Sent" to Green
-        Status.FAILED -> "Failed" to Red
-        Status.MISSED -> "Missed" to Color(0xFFFFB74D)
-        Status.SENDING -> "Sending…" to Color(0xFF64B5F6)
-        else -> "Scheduled" to Muted
-    }
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Surf).padding(14.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier.size(44.dp).clip(CircleShape).background(Green.copy(alpha = 0.18f)).clickable { onPlay() },
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, null, tint = Green)
-            }
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(it.name, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1)
-                Text(fmtWhen(it.timeMs) + " · " + fmtDur(it.durMs), color = Muted, fontSize = 13.sp)
-            }
-            Text(label, color = col, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            if (it.status != Status.SENDING) {
-                IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, null, tint = Muted) }
-            }
-        }
-        if (it.error != null) {
-            Spacer(Modifier.height(6.dp))
-            Text(it.error, color = Red, fontSize = 12.sp)
-        }
-        if (it.status == Status.FAILED || it.status == Status.MISSED) {
-            TextButton(onClick = onRetry) {
-                Icon(Icons.Default.Refresh, null, tint = Green, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("Retry in 8 seconds", color = Green)
-            }
-        }
-    }
-}
-
-// ───────────────────────── NEW ─────────────────────────
-
-@Composable
-fun SectionCard(content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
-    Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Surf).padding(16.dp),
-        content = content
-    )
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun NewScreen(onBack: () -> Unit) {
-    val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var name by remember { mutableStateOf("") }
-    var number by remember { mutableStateOf("") }
-    var file by remember { mutableStateOf<File?>(null) }
-    var mime by remember { mutableStateOf("audio/ogg") }
-    var dur by remember { mutableLongStateOf(0L) }
-    var note by remember { mutableStateOf<String?>(null) }
-    var busy by remember { mutableStateOf(false) }
-    var recording by remember { mutableStateOf(false) }
-    var elapsed by remember { mutableLongStateOf(0L) }
-    var previewing by remember { mutableStateOf(false) }
-    var showSheet by remember { mutableStateOf(false) }
-    var showManual by remember { mutableStateOf(false) }
-    val recorder = remember { Recorder(ctx) }
-    val installed = remember { Wa.installed(ctx) }
-    var pkg by remember { mutableStateOf(installed.firstOrNull() ?: "com.whatsapp") }
-
-    DisposableEffect(Unit) { onDispose { recorder.cancel(); Player.stop() } }
-
-    fun startRec() {
-        try {
-            val f = Files.newVoiceFile(ctx)
-            recorder.start(f)
-            file = null; note = null; recording = true; elapsed = 0
-        } catch (e: Exception) {
-            toast(ctx, "Cannot start recording: " + e.message)
-        }
-    }
-
-    val micPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
-        if (it) startRec() else toast(ctx, "Microphone permission needed to record")
-    }
-    val pickContact = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
-        val uri = r.data?.data
-        if (uri != null) {
-            ctx.contentResolver.query(
-                uri,
-                arrayOf(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME, ContactsContract.CommonDataKinds.Phone.NUMBER),
-                null, null, null
-            )?.use { c ->
-                if (c.moveToFirst()) {
-                    name = c.getString(0) ?: ""
-                    number = normalizeNumber(ctx, c.getString(1) ?: "")
-                }
-            }
-        }
-    }
-    val pickAudio = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) {
-            busy = true; note = null; file = null
-            scope.launch {
-                val res = withContext(Dispatchers.IO) { Files.importAudio(ctx, uri) }
-                busy = false
-                if (res == null) toast(ctx, "Could not read that audio file")
-                else { file = res.file; mime = res.mime; dur = res.durMs; note = res.note }
-            }
-        }
-    }
-
-    LaunchedEffect(recording) {
-        val t0 = SystemClock.elapsedRealtime()
-        while (recording) {
-            elapsed = SystemClock.elapsedRealtime() - t0
-            delay(200)
-        }
-    }
-
-    Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, null, tint = Color.White) }
-            Text("New voice note", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-        }
-        Column(
-            Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            // contact
-            SectionCard {
-                Text("Send to", color = Muted, fontSize = 13.sp)
-                Spacer(Modifier.height(8.dp))
-                if (number.isNotBlank()) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            Modifier.size(44.dp).clip(CircleShape).background(Green.copy(alpha = 0.18f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text((name.ifBlank { number }).take(1).uppercase(), color = Green, fontSize = 18.sp,
-                                fontWeight = FontWeight.Bold)
-                        }
-                        Spacer(Modifier.width(12.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(name.ifBlank { "+$number" }, color = Color.White, fontSize = 16.sp)
-                            Text("+$number", color = Muted, fontSize = 13.sp)
-                        }
-                        TextButton(onClick = { number = ""; name = "" }) { Text("Change", color = Green) }
-                    }
-                } else {
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Button(
-                            onClick = {
-                                pickContact.launch(Intent(Intent.ACTION_PICK, ContactsContract.CommonDataKinds.Phone.CONTENT_URI))
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Green, contentColor = Color.Black),
-                            shape = RoundedCornerShape(50)
-                        ) { Text("Choose contact") }
-                        OutlinedButton(onClick = { showManual = true }, shape = RoundedCornerShape(50)) {
-                            Text("Enter number", color = Color.White)
-                        }
-                    }
-                }
-                if (installed.size > 1) {
-                    Spacer(Modifier.height(10.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        installed.forEach { p ->
-                            FilterChip(selected = pkg == p, onClick = { pkg = p },
-                                label = { Text(if (p.endsWith("w4b")) "WhatsApp Business" else "WhatsApp") })
-                        }
-                    }
-                }
-            }
-
-            // audio
-            SectionCard {
-                Text("Voice note", color = Muted, fontSize = 13.sp)
-                Spacer(Modifier.height(10.dp))
-                when {
-                    busy -> Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(color = Green, modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.width(12.dp))
-                        Text("Converting to voice format…", color = Color.White)
-                    }
-                    recording -> Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            Modifier.size(56.dp).clip(CircleShape).background(Red).clickable {
-                                val d = recorder.stop()
-                                recording = false
-                                val f = recorder.file
-                                if (d < 700 || f == null || !f.exists()) {
-                                    toast(ctx, "Recording too short"); f?.delete()
-                                } else { file = f; mime = "audio/ogg"; dur = d }
-                            },
-                            contentAlignment = Alignment.Center
-                        ) { Icon(Icons.Default.Stop, null, tint = Color.White) }
-                        Spacer(Modifier.width(16.dp))
-                        Column {
-                            Text("Recording…", color = Red, fontWeight = FontWeight.SemiBold)
-                            Text(fmtDur(elapsed), color = Color.White, fontSize = 22.sp)
-                        }
-                    }
-                    file != null -> {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                Modifier.size(48.dp).clip(CircleShape).background(Green).clickable {
-                                    if (previewing) { Player.stop(); previewing = false }
-                                    else { previewing = true; Player.play(file!!.absolutePath) { previewing = false } }
-                                },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(if (previewing) Icons.Default.Pause else Icons.Default.PlayArrow, null, tint = Color.Black)
-                            }
-                            Spacer(Modifier.width(14.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text("Voice note ready", color = Color.White, fontWeight = FontWeight.Medium)
-                                Text(fmtDur(dur), color = Muted, fontSize = 13.sp)
-                            }
-                            IconButton(onClick = {
-                                Player.stop(); previewing = false
-                                file?.delete(); file = null; note = null
-                            }) { Icon(Icons.Default.Close, null, tint = Muted) }
-                        }
-                        if (note != null) {
-                            Spacer(Modifier.height(8.dp))
-                            Text(note!!, color = Color(0xFFFFB74D), fontSize = 12.sp)
-                        }
-                    }
-                    else -> Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Button(
-                            onClick = {
-                                if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) ==
-                                    android.content.pm.PackageManager.PERMISSION_GRANTED
-                                ) startRec() else micPerm.launch(Manifest.permission.RECORD_AUDIO)
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Green, contentColor = Color.Black),
-                            shape = RoundedCornerShape(50)
-                        ) {
-                            Icon(Icons.Default.Mic, null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(6.dp)); Text("Record")
-                        }
-                        OutlinedButton(onClick = { pickAudio.launch(arrayOf("audio/*", "application/ogg")) },
-                            shape = RoundedCornerShape(50)) {
-                            Icon(Icons.Default.FolderOpen, null, tint = Color.White, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(6.dp)); Text("Choose file", color = Color.White)
-                        }
-                    }
-                }
-            }
-        }
-        val ready = number.isNotBlank() && file != null && !recording && !busy
-        Button(
-            onClick = { Player.stop(); previewing = false; showSheet = true },
-            enabled = ready,
-            modifier = Modifier.fillMaxWidth().padding(16.dp).height(54.dp),
-            shape = RoundedCornerShape(50),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = Green, contentColor = Color.Black,
-                disabledContainerColor = Surf, disabledContentColor = Muted
-            )
-        ) { Text("Schedule", fontSize = 17.sp, fontWeight = FontWeight.SemiBold) }
-    }
-
-    if (showManual) {
-        var n by remember { mutableStateOf("") }
-        var nm by remember { mutableStateOf("") }
-        AlertDialog(
-            onDismissRequest = { showManual = false },
-            containerColor = Surf,
-            title = { Text("Enter number", color = Color.White) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(nm, { nm = it }, label = { Text("Name (optional)") }, singleLine = true)
-                    OutlinedTextField(n, { n = it }, label = { Text("Number, e.g. 0300… or +92…") }, singleLine = true)
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    val norm = normalizeNumber(ctx, n)
-                    if (norm.length < 8) toast(ctx, "Number looks too short")
-                    else { number = norm; name = nm.trim(); showManual = false }
-                }) { Text("OK", color = Green) }
-            },
-            dismissButton = { TextButton(onClick = { showManual = false }) { Text("Cancel", color = Muted) } }
-        )
-    }
-
-    if (showSheet) {
-        ScheduleSheet(
-            onDismiss = { showSheet = false },
-            onConfirm = { timeMs ->
-                val f = file!!
-                val id = Random.nextInt(1, Int.MAX_VALUE).toLong()
-                val item = Item(id, name.ifBlank { "+$number" }, number, f.absolutePath, mime, dur, timeMs, pkg,
-                    Status.PENDING, null)
-                Store.add(item)
-                Scheduler.schedule(ctx, item)
-                showSheet = false
-                if (!Setup.allOk(ctx)) toast(ctx, "Scheduled. Finish setup (gear icon) or it will not send.")
-                else toast(ctx, "Scheduled for " + fmtWhen(timeMs))
-                onBack()
-            }
         )
     }
 }
 
-// ─────────────── WhatsApp-style "Schedule message" sheet ───────────────
-
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ScheduleSheet(onDismiss: () -> Unit, onConfirm: (Long) -> Unit) {
-    val ctx = LocalContext.current
-    val today = remember {
-        Calendar.getInstance().apply {
-            set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
-        }
-    }
-    val days = remember { (0..365).map { (today.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, it) } } }
-    val dateFmt = remember { SimpleDateFormat("EEE, d MMM", Locale.getDefault()) }
-    val monFmt = remember { SimpleDateFormat("MMM", Locale.getDefault()) }
-    val dateLabels = remember { days.map { dateFmt.format(it.time) } }
-    val hourLabels = remember { listOf("12") + (1..11).map { it.toString() } }
-    val minLabels = remember { (0..59).map { "%02d".format(it) } }
-    val apLabels = remember { listOf("am", "pm") }
-    val init = remember { Calendar.getInstance().apply { add(Calendar.HOUR_OF_DAY, 1); set(Calendar.MINUTE, 0) } }
-
-    var dIdx by remember {
-        mutableIntStateOf(days.indexOfFirst {
-            it.get(Calendar.YEAR) == init.get(Calendar.YEAR) && it.get(Calendar.DAY_OF_YEAR) == init.get(Calendar.DAY_OF_YEAR)
-        }.coerceAtLeast(0))
-    }
-    var hIdx by remember { mutableIntStateOf(init.get(Calendar.HOUR)) }
-    var mIdx by remember { mutableIntStateOf(init.get(Calendar.MINUTE)) }
-    var apIdx by remember { mutableIntStateOf(init.get(Calendar.AM_PM)) }
-    val startD = remember { dIdx }
-    val startH = remember { hIdx }
-    val startM = remember { mIdx }
-    val startA = remember { apIdx }
-
-    fun chosen(): Calendar = (days[dIdx].clone() as Calendar).apply {
-        set(Calendar.HOUR_OF_DAY, hIdx + if (apIdx == 1) 12 else 0)
-        set(Calendar.MINUTE, mIdx); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
-    }
-
-    val c = chosen()
-    val label = "Send ${c.get(Calendar.DAY_OF_MONTH)} ${monFmt.format(c.time)} at " +
-        "${if (hIdx == 0) 12 else hIdx}:${"%02d".format(mIdx)} ${if (apIdx == 0) "am" else "pm"}"
-
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        containerColor = SheetBg,
-        contentColor = Color.White
-    ) {
-        Column(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 28.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text("Schedule message", color = Color.White, fontSize = 26.sp, textAlign = TextAlign.Center,
-                modifier = Modifier.padding(vertical = 14.dp))
-            Box(Modifier.fillMaxWidth().height(230.dp)) {
-                Box(
-                    Modifier.align(Alignment.Center).fillMaxWidth().height(46.dp)
-                        .clip(RoundedCornerShape(12.dp)).background(RowHi)
-                )
-                Row(Modifier.fillMaxSize()) {
-                    Wheel(dateLabels, startD, false, Modifier.weight(2.3f)) { dIdx = it }
-                    Wheel(hourLabels, startH, true, Modifier.weight(1f)) { hIdx = it }
-                    Wheel(minLabels, startM, true, Modifier.weight(1f)) { mIdx = it }
-                    Wheel(apLabels, startA, false, Modifier.weight(1f)) { apIdx = it }
-                }
-            }
-            Spacer(Modifier.height(18.dp))
-            Button(
-                onClick = {
-                    val t = chosen().timeInMillis
-                    if (t < System.currentTimeMillis() + 5000) toast(ctx, "Pick a future time")
-                    else onConfirm(t)
-                },
-                modifier = Modifier.fillMaxWidth().height(56.dp),
-                shape = RoundedCornerShape(50),
-                colors = ButtonDefaults.buttonColors(containerColor = Green, contentColor = Color(0xFF0B141A))
-            ) { Text(label, fontSize = 17.sp, fontWeight = FontWeight.Medium) }
-        }
-    }
-}
-
-@Composable
-fun Wheel(labels: List<String>, initial: Int, loop: Boolean, modifier: Modifier, onSelect: (Int) -> Unit) {
-    val n = labels.size
-    val itemH = 46.dp
-    val count = if (loop) n * 400 else n
-    val start = if (loop) n * 200 + initial else initial
-    val state = rememberLazyListState(initialFirstVisibleItemIndex = start)
-
-    LaunchedEffect(state) {
-        snapshotFlow { state.isScrollInProgress }.collect { scrolling ->
-            if (!scrolling) {
-                val li = state.layoutInfo
-                val center = (li.viewportStartOffset + li.viewportEndOffset) / 2
-                val c = li.visibleItemsInfo.minByOrNull { abs(it.offset + it.size / 2 - center) }
-                if (c != null) {
-                    val d = (c.offset + c.size / 2 - center).toFloat()
-                    if (abs(d) > 0.5f) state.animateScrollBy(d)
-                    onSelect(c.index % n)
-                }
-            }
-        }
-    }
-
-    LazyColumn(
-        state = state,
-        modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(vertical = itemH * 2),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        items(count) { index ->
-            val li = state.layoutInfo
-            val info = li.visibleItemsInfo.firstOrNull { it.index == index }
-            val center = (li.viewportStartOffset + li.viewportEndOffset) / 2
-            val dist = if (info == null) 3f else abs(info.offset + info.size / 2 - center).toFloat() / info.size
-            val a = (1f - dist * 0.38f).coerceIn(0.12f, 1f)
-            val sel = dist < 0.5f
-            Box(Modifier.height(itemH).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                Text(
-                    labels[index % n],
-                    color = if (sel) Color.White else Color(0xFF9AA0A6),
-                    fontSize = 21.sp,
-                    fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal,
-                    modifier = Modifier.alpha(a)
-                )
-            }
-        }
-    }
-}
-
-// ───────────────────────── SETUP ─────────────────────────
-
-@Composable
-fun SetupRow(title: String, desc: String, ok: Boolean, action: String, onClick: () -> Unit) {
+fun NextUpCard(item: Item, contact: Contact?, onClick: () -> Unit) {
+    val waiting = item.status == Status.AWAITING
+    val accent = if (waiting) Amber else Green
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Surf).padding(14.dp),
+        Modifier.fillMaxWidth().glass().border(BorderStroke(1.dp, accent.copy(alpha = if (waiting) 0.7f else 0.25f)),
+            RoundedCornerShape(22.dp)).bounceClick(onClick).padding(14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
-            Modifier.size(32.dp).clip(CircleShape).background(if (ok) Green else Color(0xFF3A3F44)),
-            contentAlignment = Alignment.Center
-        ) { Icon(if (ok) Icons.Default.Check else Icons.Default.Warning, null, tint = if (ok) Color.Black else Muted,
-            modifier = Modifier.size(18.dp)) }
+        Avatar(contact?.avatar, contact?.name ?: item.name, 48.dp)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(title, color = Color.White, fontWeight = FontWeight.Medium)
-            Text(desc, color = Muted, fontSize = 12.sp)
+            Text(contact?.name ?: item.name, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Schedule, null, tint = Muted, modifier = Modifier.size(14.dp))
+                Spacer(Modifier.width(4.dp))
+                Text(fmtRel(item.timeMs), color = Muted, fontSize = 13.sp)
+            }
         }
-        if (!ok) TextButton(onClick = onClick) { Text(action, color = Green) }
+        if (waiting) {
+            Text("APPROVE", color = Color.Black, fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                modifier = Modifier.clip(RoundedCornerShape(50)).background(Amber)
+                    .padding(horizontal = 14.dp, vertical = 8.dp))
+        } else StatusPill(item.status)
     }
 }
 
 @Composable
-fun SetupScreen(tick: Int, onBack: () -> Unit) {
-    val ctx = LocalContext.current
-    var refresh by remember { mutableIntStateOf(0) }
-    val notifPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { refresh++ }
-    var cc by remember { mutableStateOf(Prefs.cc(ctx)) }
-    val key = tick + refresh
-
-    Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, null, tint = Color.White) }
-            Text("Setup", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+fun ProfileCard(c: Contact, items: List<Item>, onClick: () -> Unit) {
+    val live = items.filter { it.status == Status.PENDING || it.status == Status.AWAITING }
+    val next = live.minByOrNull { it.timeMs }
+    val sent = items.count { it.status == Status.SENT }
+    Row(
+        Modifier.fillMaxWidth().glass().bounceClick(onClick).padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Avatar(c.avatar, c.name, 64.dp)
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(c.name, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("+" + c.number, color = Muted, fontSize = 13.sp)
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Chip(if (live.isEmpty()) "Nothing scheduled" else "${live.size} scheduled",
+                    if (live.isEmpty()) Muted else Green)
+                if (sent > 0) Chip("$sent sent", Muted)
+            }
+            if (next != null) {
+                Text("Next: " + fmtRel(next.timeMs), color = Color(0xFFB0BEC5), fontSize = 12.sp,
+                    modifier = Modifier.padding(top = 6.dp))
+            }
         }
-        Column(
-            Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 4.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            key.let {
-                SetupRow("WhatsApp installed", "WhatsApp or WhatsApp Business", Wa.installed(ctx).isNotEmpty(), "") {}
-                SetupRow("Accessibility service",
-                    "Lets app tap Send inside WhatsApp. Settings → Accessibility → Voice Scheduler → On.",
-                    Setup.a11yEnabled(ctx), "Open") {
-                    ctx.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                }
-                SetupRow("Display over other apps", "Lets app open WhatsApp from background at send time.",
-                    Setup.overlay(ctx), "Allow") {
-                    ctx.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + ctx.packageName))
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                }
-                SetupRow("Notifications", "Shows sending status and failures.", Setup.notif(ctx), "Allow") {
-                    if (Build.VERSION.SDK_INT >= 33) notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
-                }
-                SetupRow("Battery: unrestricted", "Stops phone killing app before send time.", Setup.battery(ctx), "Allow") {
-                    ctx.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                        Uri.parse("package:" + ctx.packageName)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                }
-            }
-            SectionCard {
-                Text("Default country code", color = Color.White, fontWeight = FontWeight.Medium)
-                Text("Used for numbers starting with 0 (92 = Pakistan).", color = Muted, fontSize = 12.sp)
-                OutlinedTextField(cc, { v -> cc = v.filter { it.isDigit() }.take(4); Prefs.setCc(ctx, cc) },
-                    singleLine = true, modifier = Modifier.padding(top = 8.dp))
-            }
-            SectionCard {
-                Text("Good to know", color = Color.White, fontWeight = FontWeight.Medium)
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    "• Phone must be on, not PIN/pattern locked at send time. Swipe-only lock or no lock works.\n" +
-                        "• Screen wakes by itself, WhatsApp opens, Send is tapped, then Home.\n" +
-                        "• Vivo/Oppo/Xiaomi: also allow Autostart and set battery to Unrestricted in phone settings.\n" +
-                        "• Number must have WhatsApp. Voice arrives in Opus format, same as native voice notes.\n" +
-                        "• Test first: schedule 2 minutes ahead.",
-                    color = Muted, fontSize = 13.sp, lineHeight = 19.sp
-                )
-            }
-            Spacer(Modifier.height(24.dp))
-        }
+        Icon(Icons.Default.ChevronRight, null, tint = Muted)
     }
+}
+
+@Composable
+fun Chip(text: String, col: Color) {
+    Text(
+        text, color = col, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+        modifier = Modifier.clip(RoundedCornerShape(50)).background(col.copy(alpha = 0.15f))
+            .padding(horizontal = 10.dp, vertical = 4.dp)
+    )
 }

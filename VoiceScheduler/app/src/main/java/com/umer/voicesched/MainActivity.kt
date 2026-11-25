@@ -18,14 +18,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        Store.expireOverdue()
-        val now = System.currentTimeMillis()
-        for (it in Store.all().filter { s -> s.status == Status.PENDING }) {
-            try {
-                if (it.timeMs > now) Scheduler.schedule(this, it) else SendService.start(this, it.id)
-            } catch (e: Exception) {
-            }
-        }
+        // Idempotent: re-arms future alarms, shows anything waiting for approval. It can never
+        // start a send by itself (the old code did, which could repeat notes).
+        try { Recovery.run(this, false) } catch (e: Exception) {}
         tick++
     }
 }
